@@ -1,33 +1,51 @@
-from sentence_transformers import SentenceTransformer
-import numpy as np
-import os
-import faiss
-import pickle
+# embeddings.py
 
+import os
+import pickle
+import faiss
+from sentence_transformers import SentenceTransformer
+
+# Paths
+DOCS_DIR = "docs"
+INDEX_FILE = "faiss_index.idx"
+MAPPING_FILE = "doc_mapping.pkl"
+
+# Load embedding model
+print("[INFO] Loading embedding model...")
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-texts = []
-for fname in os.listdir("docs"):
-        with open(os.path.join("docs", fname), "r",encoding="utf8") as f:
-            texts.append(f.read().strip())
+def read_documents():
+    texts, sources = [], []
+    for file in os.listdir(DOCS_DIR):
+        path = os.path.join(DOCS_DIR, file)
+        if os.path.isfile(path) and file.endswith(".md"):
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    texts.append(content)
+                    sources.append(file)
+    return texts, sources
 
-#simple chuking
-chunks = []
-for text in texts:
-    for i in range(0, len(text), 500):
-         chunks.append(text[i:i+500])
-         
-#encode chunks
-emb = model.encode(chunks,normalize_embeddings=True)
-emb = np.array(emb, dtype=np.float32)  
+def create_faiss_index(texts, sources):
+    print(f"[INFO] Creating embeddings for {len(texts)} documents...")
+    embeddings = model.encode(texts, show_progress_bar=True)
 
-#build FAISS index
-index = faiss.IndexFlatIP(emb.shape[1])
-index.add(emb)
+    # FAISS index (L2 distance)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
 
-os.makedirs("vectorstore", exist_ok=True)
-faiss.write_index(index,"vectorstore/faiss_index.idx")
-with open("vectorstore/chunks.pkl", "wb") as f:
-    pickle.dump(chunks, f)
+    # Save index + mapping
+    faiss.write_index(index, INDEX_FILE)
+    with open(MAPPING_FILE, "wb") as f:
+        pickle.dump(sources, f)
 
-print("FAISS index saved with {len(chunks)} chunks")
+    print(f"[INFO] FAISS index saved to {INDEX_FILE}")
+    print(f"[INFO] Document mapping saved to {MAPPING_FILE}")
+
+if __name__ == "__main__":
+    docs, files = read_documents()
+    if not docs:
+        print("[WARN] No documents found in 'docs/' folder.")
+    else:
+        create_faiss_index(docs, files)
