@@ -21,14 +21,13 @@ for text in texts:
 emb = model.encode(chunks,normalize_embeddings=True)
 emb = np.array(emb, dtype=np.float32)  
 
-sentences = [
-    "That is a happy person",
-    "That is a happy dog",
-    "That is a very happy person",
-    "Today is a sunny day"
-]
-embeddings = model.encode(sentences)
+#build FAISS index
+index = faiss.IndexFlatIP(emb.shape[1])
+index.add(emb)
 
-similarities = model.similarity(embeddings, embeddings)
-print(similarities.shape)
-# [4, 4]
+os.makedirs("vectorstore", exist_ok=True)
+faiss.write_index(index,"vectorstore/faiss_index.idx")
+with open("vectorstore/chunks.pkl", "wb") as f:
+    pickle.dump(chunks, f)
+
+print("FAISS index saved with {len(chunks)} chunks")
