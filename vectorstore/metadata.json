@@ -1,0 +1,21 @@
+{
+  "created_at": "2025-08-19T07:31:47.520097",
+  "model_name": "sentence-transformers/all-MiniLM-L6-v2",
+  "total_documents": 6,
+  "total_chunks": 53,
+  "embedding_dimension": 384,
+  "chunk_size": 800,
+  "chunk_overlap": 150,
+  "source_files": [
+    "docker-basics.md",
+    "docker-troubleshooting.md",
+    "git-github-essentials.md",
+    "github-troubleshooting.md",
+    "k8s-troubleshooting.md",
+    "kubectl-essentials.md"
+  ],
+  "index_stats": {
+    "ntotal": 53,
+    "dimension": 384
+  }
+}
