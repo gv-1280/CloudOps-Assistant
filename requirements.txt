@@ -1,0 +1,10 @@
+faiss-cpu
+sentence-transformers
+faiss-cpu
+markdown
+python-dotenv
+streamlit
+pickle
+datetime
+json
+os

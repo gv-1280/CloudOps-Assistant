@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""
-Index Builder Script - Run this ONCE to create your vector database
-This script uses sentence-transformers to create embeddings and build FAISS index
-"""
 
 import os
 import faiss
 import pickle
-import numpy as np
 from sentence_transformers import SentenceTransformer
 import json
 from datetime import datetime
