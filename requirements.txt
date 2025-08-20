@@ -1,7 +1,5 @@
-faiss-cpu
 sentence-transformers
 faiss-cpu
-markdown
-python-dotenv
 streamlit
-datetime
+requests
+python-dotenv
