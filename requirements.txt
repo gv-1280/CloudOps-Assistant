@@ -3,3 +3,6 @@ faiss-cpu
 streamlit
 requests
 python-dotenv
+markdown
+tqdm
+Json
