@@ -34,108 +34,80 @@ Instructions:
 
 class CloudOpsAssistant:
     def __init__(self):
-        """Initialize the CloudOps Assistant"""
         self.index = None
         self.chunks = None
         self.metadata = None
-        self.embedding_model = None
-        self._auto_load_database()
+        self._load_database()
     
-    def _auto_load_database(self):
-        """Automatically load vector database on startup"""
-        
+    def _load_database(self):
+        """Load vector database silently"""
         try:
-            required_files = [FAISS_INDEX_FILE, CHUNKS_FILE, METADATA_FILE]
-            if not all(os.path.exists(f) for f in required_files):
-                st.error("Vector database not found! Please run the index builder first.")
-                st.info("Run: `python build_index.py` to create the knowledge base")
-                return False
-            
-            self.index = faiss.read_index(FAISS_INDEX_FILE)
-            
-            with open(CHUNKS_FILE, 'rb') as f:
-                self.chunks = pickle.load(f)
-            
-            with open(METADATA_FILE, 'r') as f:
-                self.metadata = json.load(f)
-            
-            return True
-            
-        except Exception as e:
-            st.error(f"❌ Error loading vector database: {e}")
+            if all(os.path.exists(f) for f in [FAISS_INDEX_FILE, CHUNKS_FILE, METADATA_FILE]):
+                self.index = faiss.read_index(FAISS_INDEX_FILE)
+                with open(CHUNKS_FILE, 'rb') as f:
+                    self.chunks = pickle.load(f)
+                with open(METADATA_FILE, 'r') as f:
+                    self.metadata = json.load(f)
+                return True
             return False
-            
-       
-    
-    @st.cache_resource
-    def get_embedding_model(_self):
-        """Load embedding model (cached for performance)"""
-        if _self.embedding_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                model_name = _self.metadata.get('model_name', 'sentence-transformers/all-MiniLM-L6-v2')
-                _self.embedding_model = SentenceTransformer(model_name)
-            except ImportError:
-                st.error("❌ sentence-transformers not installed!")
-                st.info("Install with: `pip install sentence-transformers`")
-                return None
-        return _self.embedding_model
+        except:
+            return False
     
     def search_knowledge_base(self, query, top_k=3):
-        """Search for relevant CloudOps knowledge"""
-        if not self.index or not self.chunks:
+        """Search using keyword matching"""
+        if not self.chunks:
             return []
         
-        # Get embedding model
-        model = self.get_embedding_model()
-        if model is None:
-            return []
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+        scored_chunks = []
         
-        try:
-            query_embedding = model.encode([query]).astype('float32')
+        for chunk in self.chunks:
+            content_lower = chunk['content'].lower()
+            content_words = set(content_lower.split())
+            common_words = query_words.intersection(content_words)
             
-            distances, indices = self.index.search(query_embedding, min(top_k, len(self.chunks)))
-            
-            results = []
-            for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
-                if idx < len(self.chunks):
-                    chunk = self.chunks[idx]
-                    results.append({
-                        'rank': i + 1,
-                        'source_file': chunk['source_file'],
-                        'content': chunk['content'],
-                        'similarity_score': 1 / (1 + distance)
-                    })
-            
-            return results
-            
-        except Exception as e:
-            st.error(f"❌ Search error: {e}")
-            return []
+            if common_words:
+                score = len(common_words) / len(query_words) * (1 + content_lower.count(query_lower) * 0.1)
+                scored_chunks.append({
+                    'source_file': chunk['source_file'],
+                    'content': chunk['content'],
+                    'similarity_score': min(score, 1.0)
+                })
+        
+        scored_chunks.sort(key=lambda x: x['similarity_score'], reverse=True)
+        return scored_chunks[:top_k]
     
-    def generate_cloudops_answer(self, query, context_chunks):
-        """Generate CloudOps-focused answer using OpenRouter"""
+    def generate_answer(self, query, context_chunks):
+        """Generate comprehensive answer using OpenRouter API + Vectorstore"""
         if not OPENROUTER_API_KEY:
-            st.error("OPENROUTER_API_KEY not found in environment variables!")
-            st.info("Add OPENROUTER_API_KEY to your .env file")
-            return None
+            return "API key not configured. Please add API_KEY to your environment variables."
         
         try:
             context_parts = []
-            for chunk in context_chunks:
-                context_parts.append(f"📄 {chunk['source_file']}:\n{chunk['content']}\n")
+            if context_chunks:
+                for chunk in context_chunks:
+                    context_parts.append(f"📄 {chunk['source_file']}:\n{chunk['content']}\n")
+                context = "\n".join(context_parts)
+            else:
+                context = "No direct matches found in vectorstore, but I'll provide general CloudOps guidance."
             
-            context = "\n".join(context_parts)
-            
-            # Create CloudOps-focused prompt
-            user_prompt = f"""Context from CloudOps knowledge base:
+            user_prompt = f"""You are answering as a CloudOps Assistant using both your AI knowledge and the provided vectorstore context.
+
+VECTORSTORE CONTEXT:
 {context}
 
-CloudOps Question: {query}
+CLOUDOPS QUESTION: {query}
 
-Please provide a practical answer focused on Cloud & DevOps engineering. Include specific commands, configurations, or best practices where applicable."""
+INSTRUCTIONS:
+1. Use the vectorstore context as your primary source when available
+2. Combine it with your AI knowledge of CloudOps best practices  
+3. Provide practical, actionable advice with code examples
+4. If vectorstore context is limited, supplement with your general CloudOps expertise
+5. Focus on Kubernetes, Docker, Cloud infrastructure, Git/GitHub, CI/CD, DevOps tools
+
+Please provide a comprehensive answer combining both sources:"""
             
-            # API request
             headers = {
                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
                 "Content-Type": "application/json"
@@ -147,7 +119,7 @@ Please provide a practical answer focused on Cloud & DevOps engineering. Include
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}
                 ],
-                "max_tokens": 750,
+                "max_tokens": 1200,
                 "temperature": 0.1
             }
             
@@ -155,142 +127,57 @@ Please provide a practical answer focused on Cloud & DevOps engineering. Include
             
             if response.status_code == 200:
                 result = response.json()
-                answer = result['choices'][0]['message']['content']
-                return answer
+                return result['choices'][0]['message']['content']
             else:
-                # Fallback to basic response if API fails
-                st.warning(f"API temporarily unavailable. Showing context-based response.")
-                return self._generate_fallback_answer(query, context_chunks)
+                return f"API request failed. Status code: {response.status_code}"
                 
         except requests.exceptions.Timeout:
-            st.warning("Response timeout. Showing context-based response.")
-            return self._generate_fallback_answer(query, context_chunks)
+            return "Request timeout. Please try again."
         except Exception as e:
-            st.warning(f"API error: {str(e)[:100]}... Showing context-based response.")
-            return self._generate_fallback_answer(query, context_chunks)
-    
-    def _generate_fallback_answer(self, query, context_chunks):
-        """Generate a simple fallback answer when API is unavailable"""
-        if not context_chunks:
-            return f"I found information related to '{query}' but couldn't generate a comprehensive answer. Please check the retrieved context below for relevant details."
-        
-        # Simple context summary
-        sources = [chunk['source_file'] for chunk in context_chunks]
-        return f"""Based on the available CloudOps documentation, I found relevant information in: {', '.join(sources)}.
-
-For detailed information about '{query}', please refer to the context sections below. The documentation covers practical aspects of Cloud & DevOps engineering including Kubernetes, Docker, infrastructure management, and best practices.
-
-*Note: Full AI response temporarily unavailable - showing context-based results.*"""
+            return f"Error: {str(e)}"
 
 def main():
-    """Main Streamlit app"""
-    
     st.set_page_config(
-        page_title="☁️ CloudOps Assistant",
-        page_icon="🚀",
-        layout="wide",
-        initial_sidebar_state="collapsed"  
+        page_title="CloudOps Assistant",
+        page_icon="☁️",
+        layout="wide"
     )
     
-    # Header
     st.title("☁️ CloudOps Assistant")
-    st.markdown("*Your AI assistant for Kubernetes, Docker, Cloud Infrastructure & DevOps* 🚀")
+    st.markdown("*AI assistant for Kubernetes, Docker, Cloud Infrastructure & DevOps*")
     
     assistant = CloudOpsAssistant()
     
-    if not assistant.index:
-        st.error(" Knowledge base not loaded!")
-        st.info(" Please run `python build_index.py` first to create the CloudOps cache files")
+    if not assistant.chunks:
+        st.error("Vector database not found. Please ensure vectorstore files exist.")
         st.stop()
     
-    st.subheader("💬 Ask CloudOps Questions")
-    
-    example_questions = [
-        "How to deploy a Pod in Kubernetes?",
-        "Docker best practices for production",
-        "Kubernetes troubleshooting guide",
-        "Git branching strategies"
-    ]
-    
-    st.markdown("**💡 Example questions:**")
-    cols = st.columns(3)
-    for i, question in enumerate(example_questions):
-        with cols[i % 3]:
-            if st.button(question, key=f"example_{i}", help="Click to use this question"):
-                st.session_state.query = question
-    
-    # Query input
     query = st.text_area(
-        "**Your CloudOps question:**",
-        value=st.session_state.get('query', ''),
-        placeholder="e.g., How do I create a Kubernetes deployment with health checks?",
-        height=100,
-        key="query_input"
+        "Ask your CloudOps question:",
+        placeholder="Examples:\n• How to deploy a Pod in Kubernetes?\n• Docker best practices for production\n• Kubernetes troubleshooting guide\n• Git branching strategies for DevOps\n• How to create ConfigMaps and Secrets?\n• CI/CD pipeline setup with GitHub Actions",
+        height=240
     )
-    
-    # Search button
-    col1, col2, col3 = st.columns([1, 1, 4])
-    with col1:
-        search_clicked = st.button("🔍 Ask CloudOps AI", type="primary")
-    with col2:
-        if st.button("🗑️ Clear", type="secondary"):
-            st.session_state.query = ""
-            st.rerun()
-    
-    # Process query
-    if search_clicked and query.strip():
-        with st.spinner("🔍 Searching CloudOps knowledge base..."):
-            # Search for relevant content
-            search_results = assistant.search_knowledge_base(query, top_k=3)
             
-            if not search_results:
-                st.warning("❌ No relevant information found in the knowledge base.")
-                st.info("💡 Try rephrasing your question or ask about Kubernetes, Docker, Cloud, or DevOps topics.")
-            else:
-                # Generate answer
-                with st.spinner("🤖 Generating CloudOps answer..."):
-                    answer = assistant.generate_cloudops_answer(query, search_results)
-                
-                if answer:
-                    # Display answer
-                    st.subheader("🎯 CloudOps Answer")
-                    st.markdown(answer)
-                    
-                    # Show sources
-                    st.subheader("📚 Knowledge Sources")
+    col1, col2 = st.columns([1.5, 4.5])
+    with col1:
+        analyze_clicked = st.button("🔍 Analyze", type="primary", use_container_width=True)
+    if analyze_clicked:
+        if query.strip():
+            with st.spinner("Generating answer..."):
+                search_results = assistant.search_knowledge_base(query, top_k=3)
+                answer = assistant.generate_answer(query, search_results)
+            
+                st.subheader("🤖 CloudOps Answer (AI + Vectorstore)")
+                st.markdown(answer, unsafe_allow_html=True)
+            
+                if search_results:
+                    st.subheader("📚 Vectorstore Sources Used")
                     for i, result in enumerate(search_results, 1):
-                        with st.expander(f"📄 Source {i}: {result['source_file']} (relevance: {result['similarity_score']:.1%})"):
-                            st.code(result['content'][:800] + "..." if len(result['content']) > 800 else result['content'])
-                    
-                    st.caption(f"*Powered by {OPENROUTER_MODEL} • {len(search_results)} sources used*")
-    
-    elif search_clicked and not query.strip():
-        st.warning("⚠️ Please enter a CloudOps question!")
-    
-    # Footer
-    st.divider()
-    
-    # Help section (collapsible)
-    with st.expander("❓ Help & Tips"):
-        st.markdown("""
-        **🎯 What can I help you with?**
-        - 🚀 **Kubernetes**: Pods, Services, Deployments, Ingress, ConfigMaps
-        - 🐳 **Docker**: Containerization, Dockerfile best practices, multi-stage builds
-        - ☁️ **Cloud Infrastructure**: AWS, Azure, GCP services and configurations
-        - 🔧 **DevOps Tools**: Git, GitHub Actions
-        - 🔒 **Security**: Container security, cloud security best practices
-        
-        **💡 Tips for better answers:**
-        - Be specific about your use case
-        - Mention the technology stack you're using
-        - Include error messages if troubleshooting
-        - Ask about best practices and real-world scenarios
-        
-        **🔧 Technical Details:**
-        - Semantic search across CloudOps documentation
-        - AI-powered responses with source attribution
-        - Optimized for practical, actionable advice
-        """)
-
+                        with st.expander(f"📄 {result['source_file']} (relevance: {result['similarity_score']:.0%})"):
+                            st.text(result['content'][:1000] + "..." if len(result['content']) > 1000 else result['content'])
+                else:
+                    st.info("💡 Answer generated using AI knowledge (no specific vectorstore matches found)")
+    else:
+        st.warning("Please enter a question.")
 if __name__ == "__main__":
     main()
